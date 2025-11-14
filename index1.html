@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Simple HLS Player</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background-color: Canvas;
+        color: CanvasText;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      main {
+        width: min(90vw, 600px);
+        text-align: center;
+      }
+
+      video {
+        width: 100%;
+        max-height: 60vh;
+        background: #000;
+        border-radius: 12px;
+      }
+
+      button {
+        margin-top: 1rem;
+        padding: 0.65rem 1.25rem;
+        border: none;
+        border-radius: 999px;
+        font-size: 1rem;
+        cursor: pointer;
+      }
+
+      .status {
+        margin-top: 0.5rem;
+        font-size: 0.95rem;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1.6.14/dist/hls.min.js" defer></script>
+    <script>
+      document.addEventListener("DOMContentLoaded", () => {
+        const playlistUrl = "playlist.m3u8";
+        const video = document.getElementById("player");
+        const status = document.getElementById("status");
+
+        function setStatus(text, isError = false) {
+          status.textContent = text;
+          status.style.color = isError ? "#d32f2f" : "inherit";
+        }
+
+        function attachSource() {
+          // if (window.Hls && Hls.isSupported()) {
+          //   const hls = new Hls();
+          //   hls.loadSource(playlistUrl);
+          //   hls.attachMedia(video);
+          //   hls.on(Hls.Events.MANIFEST_PARSED, () => {
+          //     setStatus("Ready");
+          //   });
+          //   hls.on(Hls.Events.ERROR, (_, data) => {
+          //     console.error('HLS error', data);
+          //     if (data.fatal) setStatus("Error", true);
+          //   });
+          // } else
+          if (video.canPlayType("application/vnd.apple.mpegurl")) {
+            video.src = playlistUrl;
+            video.addEventListener("loadedmetadata", () => {
+              setStatus("Ready");
+            });
+            video.addEventListener("error", (e) => {
+              console.error("html5 video error", { e, mp: video.error });
+              setStatus("Error", true);
+            });
+          } else {
+            setStatus("HLS not supported in this browser. Try Safari or a modern Chromium build.", true);
+          }
+        }
+
+        document.getElementById("reload").addEventListener("click", () => {
+          video.pause();
+          video.removeAttribute("src");
+          video.load();
+          setStatus("Reloading stream…");
+          attachSource();
+        });
+
+        attachSource();
+      });
+    </script>
+  </head>
+  <body>
+    <main>
+      <h1>Playlist Player</h1>
+      <video id="player" controls playsinline></video>
+      <div class="status" id="status">Loading…</div>
+      <button id="reload" type="button">Reload Playlist</button>
+    </main>
+  </body>
+</html>

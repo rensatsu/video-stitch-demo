@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FFmpeg.wasm Video Stitcher</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #020617;
+        color: #e2e8f0;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: radial-gradient(circle at top, #0f172a, #020617 65%);
+      }
+
+      main {
+        width: min(960px, 100% - 2rem);
+        margin: 2rem auto;
+        padding: 2rem;
+        border-radius: 1.5rem;
+        background: rgba(15, 23, 42, 0.75);
+        backdrop-filter: blur(12px);
+        box-shadow: 0 30px 80px rgba(2, 6, 23, 0.65);
+      }
+
+      h1 {
+        margin: 0 0 0.25rem;
+        font-size: clamp(1.8rem, 4vw, 2.4rem);
+      }
+
+      p {
+        margin: 0;
+        color: #94a3b8;
+      }
+
+      ul {
+        margin: 1.5rem 0;
+        padding-left: 1.5rem;
+        color: #cbd5f5;
+        display: grid;
+        gap: 0.3rem;
+      }
+
+      video {
+        width: 100%;
+        height: auto;
+        border-radius: 1rem;
+        background: #000;
+        margin: 1rem 0;
+        box-shadow: inset 0 0 0 1px rgba(148, 163, 184, 0.25);
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        background: linear-gradient(135deg, #22d3ee, #6366f1);
+        color: #0f172a;
+        font-weight: 700;
+        padding: 0.85rem 1.75rem;
+        font-size: 1rem;
+        cursor: pointer;
+        box-shadow: 0 15px 35px rgba(14, 116, 144, 0.35);
+        transition: transform 120ms ease, opacity 120ms ease;
+      }
+
+      button:disabled {
+        opacity: 0.35;
+        cursor: not-allowed;
+        box-shadow: none;
+      }
+
+      .status {
+        margin-top: 0.5rem;
+        font-family: "IBM Plex Mono", "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        font-size: 0.95rem;
+        color: #cbd5f5;
+        min-height: 1.3rem;
+      }
+
+      .badge-row {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+        margin-top: 0.75rem;
+      }
+
+      .badge {
+        border-radius: 999px;
+        padding: 0.15rem 0.65rem;
+        font-size: 0.85rem;
+        letter-spacing: 0.02em;
+        background: rgba(99, 102, 241, 0.15);
+        border: 1px solid rgba(99, 102, 241, 0.35);
+        color: #c7d2fe;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Video Stitch</h1>
+
+      <ul>
+        <li>7125369-sd_426_240_30fps.mp4</li>
+        <li>17700150-sd_426_240_30fps.mp4</li>
+        <li>14699130_640_360_50fps.mp4</li>
+        <li>20048065-sd_426_240_30fps.mp4</li>
+      </ul>
+
+      <video id="stitched" controls playsinline preload="metadata"></video>
+      <div class="badge-row">
+        <span class="badge" id="length-badge">Duration: --</span>
+        <span class="badge" id="status">Idle</span>
+      </div>
+    </main>
+
+    <script type="module" src="/src/index4.ts"></script>
+  </body>
+</html>

@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Index 3 – Single Tag Stitch</title>
+    <style>
+      :root {
+        font-family: "Inter", system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        color: #0f172a;
+        background: radial-gradient(circle at top, #e0f2fe, #fff 55%);
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        padding: 2rem;
+      }
+
+      main {
+        width: min(960px, 100%);
+        background: rgba(255, 255, 255, 0.95);
+        border-radius: 1.5rem;
+        padding: clamp(1.5rem, 2.5vw, 3rem);
+        box-shadow: 0 25px 65px rgba(15, 23, 42, 0.15);
+      }
+
+      h1 {
+        margin: 0;
+        font-size: clamp(1.6rem, 2.8vw, 2.4rem);
+        letter-spacing: -0.01em;
+      }
+
+      p {
+        color: #475569;
+        margin: 0.5rem 0 1rem;
+      }
+
+      video {
+        width: 100%;
+        border-radius: 1rem;
+        background: #000;
+        margin: 1rem 0;
+        box-shadow: inset 0 0 0 1px rgba(15, 23, 42, 0.15);
+      }
+
+      .status {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        flex-wrap: wrap;
+        gap: 0.75rem;
+        padding: 0.85rem 1.1rem;
+        border-radius: 0.85rem;
+        background: #f8fafc;
+        color: #0f172a;
+        font-weight: 500;
+      }
+
+      button {
+        border: none;
+        border-radius: 999px;
+        padding: 0.65rem 1.4rem;
+        background: #2563eb;
+        color: white;
+        font-weight: 600;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      ul {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+        gap: 0.85rem;
+        margin: 1.5rem 0 0;
+        padding: 0;
+        list-style: none;
+      }
+
+      li {
+        padding: 0.9rem 1rem;
+        border-radius: 0.9rem;
+        background: #eff6ff;
+        color: #1e3a8a;
+        border: 1px solid rgba(37, 99, 235, 0.25);
+        font-size: 0.95rem;
+      }
+
+      code {
+        font-family: "JetBrains Mono", "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+        font-size: 0.9rem;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.4/dist/mp4box.all.min.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>One Video Element, Four Clips</h1>
+      <p>
+        We concatenate normal MP4 files in the browser via <code>MediaSource</code>. All samples stream
+        into a single <code>&lt;video&gt;</code> so the control bar shows the full stitched duration.
+      </p>
+
+      <video id="stitched" controls preload="metadata" playsinline></video>
+      <div class="status">
+        <span id="status-text">Idle</span>
+        <span id="duration-text">Total length: —</span>
+      </div>
+      <button id="reload">Rebuild Stream</button>
+
+      <ul>
+        <li>#1 • 7125369<br /><small>426×240 @ 30fps</small></li>
+        <li>#2 • 17700150<br /><small>426×240 @ 30fps</small></li>
+        <li>#3 • 34678935<br /><small>640×360 @ 50fps</small></li>
+        <li>#4 • 20048065<br /><small>426×240 @ 30fps</small></li>
+      </ul>
+    </main>
+
+    <script type="module">
+      const CLIPS = [
+        'https://videos.pexels.com/video-files/7125369/7125369-sd_426_240_30fps.mp4',
+        'https://videos.pexels.com/video-files/17700150/17700150-sd_426_240_30fps.mp4',
+        'https://videos.pexels.com/video-files/34678935/14699130_640_360_50fps.mp4',
+        'https://videos.pexels.com/video-files/20048065/20048065-sd_426_240_30fps.mp4',
+      ];
+
+      const videoEl = document.getElementById('stitched');
+      const statusText = document.getElementById('status-text');
+      const durationText = document.getElementById('duration-text');
+      const reloadBtn = document.getElementById('reload');
+
+      const SINGLE_BUFFER_MODE = detectSingleBufferBrowser();
+
+      if (!('MediaSource' in window)) {
+        statusText.textContent = 'MediaSource API unavailable in this browser.';
+        reloadBtn.disabled = true;
+      } else {
+        reloadBtn.addEventListener('click', () => {
+          build().catch((err) => {
+            console.error(err);
+            statusText.textContent = `Failed: ${err.message}`;
+          });
+        });
+        build().catch((err) => {
+          console.error(err);
+          statusText.textContent = `Failed: ${err.message}`;
+        });
+      }
+
+      async function build() {
+        reloadBtn.disabled = true;
+        statusText.textContent = 'Preparing MediaSource…';
+        durationText.textContent = 'Total length: —';
+
+        const mediaSource = new MediaSource();
+        const objectUrl = URL.createObjectURL(mediaSource);
+        videoEl.pause();
+        videoEl.removeAttribute('src');
+        videoEl.load();
+        videoEl.src = objectUrl;
+
+        const pipelines = new Map();
+        const disabledTracks = new Set();
+        let pendingFinalization = false;
+        let totalSeconds = 0;
+        let audioSuppressed = false;
+        let desiredDuration = 0;
+        let durationDirty = false;
+
+        const buffersIdle = () => {
+          if (mediaSource.readyState !== 'open') return false;
+          for (const pipe of pipelines.values()) {
+            if (pipe.queue.length) {
+              return false;
+            }
+          }
+          const { sourceBuffers } = mediaSource;
+          for (let i = 0; i < sourceBuffers.length; i += 1) {
+            if (sourceBuffers[i].updating) {
+              return false;
+            }
+          }
+          return true;
+        };
+
+        const maybeApplyDuration = () => {
+          if (!durationDirty) return;
+          if (!Number.isFinite(desiredDuration)) return;
+          if (!buffersIdle()) return;
+          try {
+            mediaSource.duration = desiredDuration;
+            durationDirty = false;
+          } catch (err) {
+            console.warn('duration update skipped', err);
+          }
+        };
+
+        const requestDurationUpdate = () => {
+          durationDirty = true;
+          maybeApplyDuration();
+        };
+
+        const finalize = () => {
+          if (!pendingFinalization) return;
+          if (!buffersIdle()) return;
+          maybeApplyDuration();
+          safeEndOfStream(mediaSource);
+          pendingFinalization = false;
+          statusText.textContent = 'Ready — press play!';
+          reloadBtn.disabled = false;
+        };
+
+        mediaSource.addEventListener('sourceopen', async () => {
+          try {
+            mediaSource.duration = Infinity;
+            for (let i = 0; i < CLIPS.length; i += 1) {
+              const url = CLIPS[i];
+              statusText.textContent = `Fetching clip ${i + 1}/${CLIPS.length}`;
+              const { trackMap, seconds } = await transmuxClip(url, i);
+              totalSeconds += seconds;
+              desiredDuration = totalSeconds;
+              requestDurationUpdate();
+              durationText.textContent = `Total length: ${formatDuration(totalSeconds)}`;
+              statusText.textContent = `Appending clip ${i + 1}/${CLIPS.length}`;
+              for (const [type, payload] of trackMap.entries()) {
+                if (disabledTracks.has(type)) continue;
+                const pipe = ensurePipeline({
+                  type,
+                  codec: payload.codec,
+                  mediaSource,
+                  pipelines,
+                  disabledTracks,
+                  finalize,
+                  onDurationSync: maybeApplyDuration,
+                  onAudioSuppressed: (message) => {
+                    audioSuppressed = true;
+                    statusText.textContent = message;
+                  },
+                });
+                if (!pipe) continue;
+                for (const chunk of payload.chunks) {
+                  pipe.queue.push(chunk);
+                }
+                pump(pipe, finalize);
+              }
+            }
+            pendingFinalization = true;
+            if (!audioSuppressed) {
+              statusText.textContent = 'All clips queued — finishing…';
+            }
+            finalize();
+          } catch (err) {
+            statusText.textContent = `Failed: ${err.message}`;
+            reloadBtn.disabled = false;
+            safeEndOfStream(mediaSource, 'decode');
+            throw err;
+          } finally {
+            URL.revokeObjectURL(objectUrl);
+          }
+        }, { once: true });
+      }
+
+      function ensurePipeline({
+        type,
+        codec,
+        mediaSource,
+        pipelines,
+        disabledTracks,
+        finalize,
+        onDurationSync,
+        onAudioSuppressed,
+      }) {
+        if (pipelines.has(type)) return pipelines.get(type);
+        if (disabledTracks.has(type)) return null;
+        const mime = `${type === 'audio' ? 'audio' : 'video'}/mp4; codecs="${codec}"`;
+        if (!MediaSource.isTypeSupported(mime)) {
+          throw new Error(`Unsupported ${type} codec: ${mime}`);
+        }
+        let sourceBuffer;
+        try {
+          sourceBuffer = mediaSource.addSourceBuffer(mime);
+        } catch (err) {
+          if (type === 'audio') {
+            disabledTracks.add(type);
+            if (typeof onAudioSuppressed === 'function') {
+              const message = SINGLE_BUFFER_MODE
+                ? 'Audio disabled: browser only exposes one SourceBuffer, so video plays silently.'
+                : `Audio disabled: ${err.message}`;
+              onAudioSuppressed(message);
+            }
+            console.warn('Audio SourceBuffer disabled', err);
+            return null;
+          }
+          throw err;
+        }
+        sourceBuffer.mode = 'sequence';
+        const pipeline = { type, sourceBuffer, queue: [] };
+        sourceBuffer.addEventListener('updateend', () => {
+          pump(pipeline, finalize);
+          if (typeof onDurationSync === 'function') {
+            onDurationSync();
+          }
+          finalize();
+        });
+        sourceBuffer.addEventListener('error', (event) => {
+          console.error('SourceBuffer error', event);
+          statusText.textContent = 'SourceBuffer error — see console.';
+        });
+        pipelines.set(type, pipeline);
+        return pipeline;
+      }
+
+      function pump(pipeline, finalize = () => {}) {
+        if (!pipeline || pipeline.sourceBuffer.updating) return;
+        const chunk = pipeline.queue.shift();
+        if (!chunk) {
+          finalize();
+          return;
+        }
+        statusText.textContent = chunk.label;
+        pipeline.sourceBuffer.appendBuffer(chunk.buffer);
+      }
+
+      async function transmuxClip(url, index) {
+        if (!window.MP4Box) {
+          throw new Error('MP4Box.js failed to load.');
+        }
+        const arrayBuffer = await fetchArrayBuffer(url);
+        return new Promise((resolve, reject) => {
+          const mp4boxFile = MP4Box.createFile();
+          const trackMap = new Map();
+          const completion = new Map();
+          let seconds = 0;
+
+          mp4boxFile.onError = reject;
+          mp4boxFile.onReady = (info) => {
+            seconds = info.duration / info.timescale;
+            let playableTracks = info.tracks.filter((t) => t.video || t.audio);
+            if (!playableTracks.length) {
+              reject(new Error('Clip has no playable tracks.'));
+              return;
+            }
+            for (const track of playableTracks) {
+              const type = track.video ? 'video' : 'audio';
+              trackMap.set(type, { codec: track.codec, chunks: [] });
+              completion.set(type, false);
+              mp4boxFile.setSegmentOptions(track.id, type, {
+                nbSamples: track.nb_samples,
+                rapAlignment: true,
+              });
+            }
+            const initSegments = mp4boxFile.initializeSegmentation();
+            initSegments.forEach((segment) => {
+              const bucket = trackMap.get(segment.user);
+              bucket.chunks.push({ label: `Clip ${index + 1} init ${segment.user}`, buffer: segment.buffer.slice(0) });
+            });
+            mp4boxFile.start();
+          };
+
+          mp4boxFile.onSegment = (id, type, buffer, sampleNumber, isLast) => {
+            const bucket = trackMap.get(type);
+            bucket.chunks.push({ label: `Clip ${index + 1} ${type}`, buffer: buffer.slice(0) });
+            mp4boxFile.releaseUsedSamples(id, sampleNumber);
+            if (isLast) {
+              completion.set(type, true);
+              if ([...completion.values()].every(Boolean)) {
+                resolve({ trackMap, seconds });
+              }
+            }
+          };
+
+          arrayBuffer.fileStart = 0;
+          mp4boxFile.appendBuffer(arrayBuffer);
+          mp4boxFile.flush();
+        });
+      }
+
+      async function fetchArrayBuffer(url) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Network error ${response.status} for ${url}`);
+        }
+        return response.arrayBuffer();
+      }
+
+      function detectSingleBufferBrowser() {
+        const ua = navigator.userAgent;
+        const isIOS = /iP(hone|ad|od)/.test(ua);
+        const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Android/.test(ua);
+        return isIOS || isSafari;
+      }
+
+      function safeEndOfStream(mediaSource, reason) {
+        if (!mediaSource || mediaSource.readyState !== 'open') return;
+        try {
+          if (reason) {
+            mediaSource.endOfStream(reason);
+          } else {
+            mediaSource.endOfStream();
+          }
+        } catch (err) {
+          console.warn('endOfStream skipped', err);
+        }
+      }
+
+      function formatDuration(seconds) {
+        if (!Number.isFinite(seconds)) return '—';
+        const rounded = Math.round(seconds);
+        const m = Math.floor(rounded / 60);
+        const s = String(rounded % 60).padStart(2, '0');
+        return `${m}:${s}`;
+      }
+    </script>
+  </body>
+</html>

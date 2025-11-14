@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Client-side stitched playback</title>
+    <style>
+      :root {
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+        color: #0f172a;
+        background: #f8fafc;
+      }
+
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+      }
+
+      main {
+        width: min(880px, 100% - 2rem);
+        margin: 2rem auto;
+        padding: 2rem;
+        border-radius: 1.25rem;
+        background: #fff;
+        box-shadow: 0 18px 36px rgba(15, 23, 42, 0.15);
+      }
+
+      h1 {
+        margin: 0 0 0.5rem;
+        font-size: 1.5rem;
+      }
+
+      video {
+        width: 100%;
+        margin: 1rem 0;
+        border-radius: 0.8rem;
+        background: #000;
+      }
+
+      button {
+        display: inline-flex;
+        align-items: center;
+        gap: 0.4rem;
+        border: none;
+        border-radius: 999px;
+        background: #2563eb;
+        color: #fff;
+        font-weight: 600;
+        padding: 0.65rem 1.4rem;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        opacity: 0.5;
+        cursor: not-allowed;
+      }
+
+      pre {
+        background: #0f172a;
+        color: #e2e8f0;
+        padding: 1rem;
+        border-radius: 0.5rem;
+        overflow-x: auto;
+      }
+
+      .note {
+        margin: 0.5rem 0 0;
+        color: #475569;
+        font-size: 0.95rem;
+      }
+
+      ul {
+        padding-left: 1.2rem;
+        color: #475569;
+      }
+    </style>
+    <script src="https://cdn.jsdelivr.net/npm/mp4box@0.5.4/dist/mp4box.all.min.js" defer></script>
+  </head>
+  <body>
+    <main>
+      <h1>Stitched Video Player</h1>
+      <p class="note">
+        This demo never swaps <code>video.src</code>. We fetch whole MP4 files, transmux them
+        inside the browser with <strong>MP4Box.js</strong>, and stream the resulting fragmented
+        MP4 into a single <code>MediaSource</code> instance.
+      </p>
+
+      <video id="stitched-player" controls preload="metadata" playsinline></video>
+      <div id="status" class="note">Idle</div>
+    </main>
+
+    <script type="module">
+      const videoEl = document.getElementById('stitched-player');
+      const statusEl = document.getElementById('status');
+
+      const PLAYLIST = [
+        {
+          label: '#1 - 7125369',
+          url: 'https://videos.pexels.com/video-files/7125369/7125369-sd_426_240_30fps.mp4',
+        },
+        {
+          label: '#2 - 17700150',
+          url: 'https://videos.pexels.com/video-files/17700150/17700150-sd_426_240_30fps.mp4',
+        },
+        {
+          label: '#3 - 34678935',
+          url: 'https://videos.pexels.com/video-files/34678935/14699130_640_360_50fps.mp4',
+        },
+        {
+          label: '#4 - 20048065',
+          url: 'https://videos.pexels.com/video-files/20048065/20048065-sd_426_240_30fps.mp4',
+        },
+      ];
+
+      const trackPipelines = new Map();
+      const disabledTracks = new Set();
+      let mediaSource;
+      let enqueueComplete = false;
+      let audioSuppressed = false;
+      let audioStripped = false;
+
+      const SINGLE_BUFFER_MODE = detectSingleBufferBrowser();
+
+      if (!window.MediaSource) {
+        statusEl.textContent = 'MediaSource API is unavailable in this browser.';
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+        startPlayback().catch((err) => {
+          console.error(err);
+          statusEl.textContent = `Failed: ${err.message}`;
+        });
+      });
+
+      async function startPlayback() {
+        statusEl.textContent = 'Preparing MediaSource…';
+        enqueueComplete = false;
+        trackPipelines.clear();
+        disabledTracks.clear();
+        audioSuppressed = false;
+        audioStripped = false;
+
+        mediaSource = new MediaSource();
+        const objectUrl = URL.createObjectURL(mediaSource);
+        videoEl.src = objectUrl;
+
+        await once(mediaSource, 'sourceopen');
+        statusEl.textContent = 'Downloading clips…';
+
+        if (SINGLE_BUFFER_MODE) {
+          disabledTracks.add('audio');
+          audioStripped = true;
+        }
+
+        for (const clip of PLAYLIST) {
+          const segmentMap = await transmuxClip(clip);
+          for (const [type, payload] of segmentMap.entries()) {
+            const pipeline = ensurePipeline(type, payload.codec);
+            if (!pipeline) continue;
+            for (const chunk of payload.chunks) {
+              pipeline.queue.push(chunk);
+            }
+            pump(type);
+          }
+        }
+
+        if (audioStripped) {
+          statusEl.textContent =
+            'Single-buffer browser detected: audio tracks skipped so playback can continue.';
+        }
+
+        enqueueComplete = true;
+        maybeFinalize();
+      }
+
+      function ensurePipeline(type, codec) {
+        if (disabledTracks.has(type)) return null;
+        if (trackPipelines.has(type)) return trackPipelines.get(type);
+        const mime = `${type === 'audio' ? 'audio' : 'video'}/mp4; codecs="${codec}"`;
+        if (!MediaSource.isTypeSupported(mime)) {
+          throw new Error(`Unsupported ${type} codec: ${mime}`);
+        }
+
+        let sourceBuffer;
+        try {
+          sourceBuffer = mediaSource.addSourceBuffer(mime);
+        } catch (err) {
+          const quotaHit = err.name === 'QuotaExceededError' || /limit/i.test(err.message);
+          if (type === 'audio' && quotaHit) {
+            audioSuppressed = true;
+            disabledTracks.add(type);
+            statusEl.textContent =
+              'Audio muted: browser only allows one SourceBuffer. Try Chrome/Firefox for A/V.';
+            console.warn('Audio pipeline disabled due to SourceBuffer quota.');
+            return null;
+          }
+          throw err;
+        }
+        sourceBuffer.mode = 'sequence';
+        const pipeline = {
+          type,
+          codec,
+          sourceBuffer,
+          queue: [],
+        };
+        sourceBuffer.addEventListener('updateend', () => {
+          pump(type);
+          maybeFinalize();
+        });
+        sourceBuffer.addEventListener('error', (event) => {
+          console.error('SourceBuffer error', event);
+          statusEl.textContent = 'SourceBuffer error—see console.';
+        });
+        trackPipelines.set(type, pipeline);
+        return pipeline;
+      }
+
+      function pump(type) {
+        const pipeline = trackPipelines.get(type);
+        if (!pipeline || pipeline.sourceBuffer.updating) return;
+        const chunk = pipeline.queue.shift();
+        if (!chunk) return;
+        statusEl.textContent = `Appending ${chunk.label}`;
+        pipeline.sourceBuffer.appendBuffer(chunk.buffer);
+      }
+
+      function maybeFinalize() {
+        if (!enqueueComplete) return;
+        if (!mediaSource || mediaSource.readyState !== 'open') return;
+        for (const pipeline of trackPipelines.values()) {
+          if (pipeline.queue.length || pipeline.sourceBuffer.updating) {
+            return;
+          }
+        }
+        mediaSource.endOfStream();
+        statusEl.textContent = 'All clips appended. Press play!';
+      }
+
+      async function transmuxClip(clip) {
+        statusEl.textContent = `Fetching ${clip.label}`;
+        const arrayBuffer = await fetchArrayBuffer(clip.url);
+        statusEl.textContent = `Transmuxing ${clip.label}`;
+
+        return new Promise((resolve, reject) => {
+          if (!window.MP4Box) {
+            reject(new Error('MP4Box.js failed to load.'));
+            return;
+          }
+
+          const mp4boxFile = MP4Box.createFile();
+          const trackMap = new Map();
+          const completion = new Map();
+
+          mp4boxFile.onError = (err) => {
+            console.log('mp4box error', err);
+            return reject(err);
+          };
+
+          mp4boxFile.onReady = (info) => {
+            let playableTracks = info.tracks.filter((t) => t.video || t.audio);
+            if (SINGLE_BUFFER_MODE) {
+              const videoTracks = playableTracks.filter((t) => t.video);
+              if (videoTracks.length) {
+                audioStripped = true;
+                playableTracks = videoTracks;
+              }
+            }
+            if (!playableTracks.length) {
+              reject(new Error(`${clip.label} has no playable audio/video tracks.`));
+              return;
+            }
+            for (const track of playableTracks) {
+              const type = track.video ? 'video' : 'audio';
+              trackMap.set(type, { codec: track.codec, chunks: [] });
+              completion.set(type, false);
+              mp4boxFile.setSegmentOptions(track.id, type, {
+                nbSamples: track.nb_samples,
+                rapAlignment: true,
+              });
+            }
+            const initSegments = mp4boxFile.initializeSegmentation();
+            initSegments.forEach((segment) => {
+              const bucket = trackMap.get(segment.user);
+              bucket.chunks.push({
+                label: `${clip.label} (init ${segment.user})`,
+                buffer: segment.buffer.slice(0),
+              });
+            });
+            mp4boxFile.start();
+          };
+
+          mp4boxFile.onSegment = (id, type, buffer, sampleNumber, isLast) => {
+            const bucket = trackMap.get(type);
+            bucket.chunks.push({ label: `${clip.label} (${type})`, buffer: buffer.slice(0) });
+            mp4boxFile.releaseUsedSamples(id, sampleNumber);
+            if (isLast) {
+              completion.set(type, true);
+              const done = Array.from(completion.values()).every(Boolean);
+              if (done) {
+                resolve(trackMap);
+              }
+            }
+          };
+
+          arrayBuffer.fileStart = 0;
+          mp4boxFile.appendBuffer(arrayBuffer);
+          mp4boxFile.flush();
+        });
+      }
+
+      function detectSingleBufferBrowser() {
+        const ua = navigator.userAgent;
+        const isIOS = /iP(hone|ad|od)/.test(ua);
+        const isSafari = /Safari/.test(ua) && !/Chrome|Chromium|Android/.test(ua);
+        return isIOS || isSafari;
+      }
+
+      async function fetchArrayBuffer(url) {
+        const response = await fetch(url);
+        if (!response.ok) {
+          throw new Error(`Network error ${response.status} for ${url}`);
+        }
+        return response.arrayBuffer();
+      }
+
+      function once(target, event) {
+        return new Promise((resolve) => {
+          target.addEventListener(event, resolve, { once: true });
+        });
+      }
+    </script>
+  </body>
+</html>
