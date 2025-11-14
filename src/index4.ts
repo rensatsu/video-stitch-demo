@@ -59,7 +59,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 async function ensureCore() {
   if (ffmpegReady) return;
   setStatus('Loading…');
-  await ffmpeg.load();
+  await ffmpeg.load().catch(e => alert("Error loading FFmpeg"));
   ffmpegReady = true;
 }
 
@@ -84,24 +84,8 @@ async function ensureAudioTrack(filename: string, index: number) {
   const hasAudio = await clipHasAudio(filename, index);
 
   if (hasAudio) {
-    setStatus(`Clip ${index + 1}: remuxing source audio`);
-    await ffmpeg.exec([
-      '-y',
-      '-i',
-      filename,
-      '-c:v',
-      'copy',
-      '-c:a',
-      'aac',
-      '-ar',
-      '48000',
-      '-ac',
-      '2',
-      '-movflags',
-      '+faststart',
-      output,
-    ]);
-    return output;
+    setStatus(`Clip ${index + 1}: audio present — reusing original track`);
+    return filename;
   }
 
   setStatus(`Clip ${index + 1}: injecting silent audio track`);
